@@ -1,0 +1,25 @@
+{
+  "search": {
+    "platform": "xiaohongshu",
+    "keywords": ["深圳宝安租房", "宝安两房", "宝安租房"],
+    "location": "深圳宝安",
+    "exclude_keywords": ["转租", "短租", "日租"]
+  },
+  "filters": {
+    "price_min": 3000,
+    "price_max": 3500,
+    "room_type": "2室1厅",
+    "required_tags": [],
+    "preferred_tags": ["近地铁", "精装", "独立卫浴"]
+  },
+  "notification": {
+    "enabled": true,
+    "method": "telegram",
+    "template": "新房源提醒"
+  },
+  "scraper": {
+    "max_pages": 5,
+    "delay_seconds": 2,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  }
+}
