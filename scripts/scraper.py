@@ -216,27 +216,76 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
 
         page = context.new_page()
 
+        # 如果有 Cookie，先访问首页让 Cookie 生效
+        if cookie_str:
+            try:
+                page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=20000)
+                time.sleep(random.uniform(1, 2))
+            except Exception:
+                pass
+
+        login_blocked = False
+
         for keyword in keywords:
+            if login_blocked:
+                print(f"  跳过 '{keyword}' (需要登录)")
+                continue
+
             print(f"\n  搜索关键词: {keyword}")
             search_url = f"https://www.xiaohongshu.com/search_result?keyword={quote(keyword)}&source=web_search_result_notes"
 
             try:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                time.sleep(random.uniform(2, 4))
+                time.sleep(random.uniform(3, 5))
             except Exception as e:
                 print(f"  访问搜索页失败: {e}")
                 continue
+
+            # 处理登录弹窗 — 小红书搜索必须登录
+            login_modal = page.query_selector('div.login-container, div[class*="login-modal"], div[class*="loginContainer"]')
+            if login_modal:
+                if not cookie_str:
+                    print("  ⚠️ 小红书搜索需要登录才能查看结果")
+                    print("  请按以下步骤配置 Cookie:")
+                    print("    1. 浏览器打开 https://www.xiaohongshu.com 并登录")
+                    print("    2. F12 打开开发者工具 → Application → Cookies")
+                    print("    3. 复制所有 Cookie 值到 .env 文件:")
+                    print('       XHS_COOKIE=a1=xxx; webId=xxx; web_session=xxx; ...')
+                    login_blocked = True
+                    continue
+
+                # 有 Cookie 但还是弹登录 → Cookie 过期
+                # 尝试关闭弹窗看看
+                page.keyboard.press("Escape")
+                time.sleep(1)
+                login_still = page.query_selector('div.login-container, div[class*="login-modal"]')
+                if login_still and login_still.is_visible():
+                    print("  ⚠️ Cookie 已过期，请重新获取")
+                    login_blocked = True
+                    continue
+                print("  已关闭登录弹窗")
+
+            # 切换到「图文」标签（过滤掉视频）
+            try:
+                text_tab = page.query_selector('div.search-tab span:has-text("图文"), a:has-text("图文")')
+                if text_tab:
+                    text_tab.click()
+                    time.sleep(random.uniform(1, 2))
+            except Exception:
+                pass
 
             # 滚动加载更多
             loaded_pages = 0
             while loaded_pages < pages_limit:
                 # 提取当前页面的帖子
                 try:
-                    # 小红书搜索结果的帖子容器
-                    cards = page.query_selector_all('section.note-item, div[class*="note-item"], a[class*="cover"]')
+                    # 小红书搜索结果选择器（多种尝试）
+                    cards = page.query_selector_all('section.note-item, div[class*="note-item"]')
                     if not cards:
-                        # 备用选择器
-                        cards = page.query_selector_all('div[data-v-a264b01a], div.feeds-page section')
+                        cards = page.query_selector_all('div.feeds-page section, div[class*="feeds"] section')
+                    if not cards:
+                        # 最宽泛：任何包含笔记链接的容器
+                        cards = page.query_selector_all('a[href*="/explore/"], a[href*="/search_result/"]')
 
                     for card in cards:
                         try:
@@ -292,6 +341,47 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
 
                         except Exception as e:
                             continue
+
+                    # Fallback: regex extract from raw HTML if no cards found via selectors
+                    if not cards:
+                        html = page.content()
+                        # Match note links and nearby titles
+                        note_matches = re.findall(
+                            r'href="(/explore/[a-f0-9]+)"[^>]*>.*?<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</span>',
+                            html, re.DOTALL
+                        )
+                        if not note_matches:
+                            note_matches = re.findall(
+                                r'href="(/explore/[a-f0-9]+)"', html
+                            )
+                            note_matches = [(m, "") for m in note_matches] if note_matches else []
+
+                        for href, title in note_matches:
+                            link = f"https://www.xiaohongshu.com{href}"
+                            if link in seen_links:
+                                continue
+                            seen_links.add(link)
+                            title = title.strip() if title else f"小红书笔记 {href.split('/')[-1]}"
+                            price = parse_price_from_text(title)
+                            room_type = parse_room_type(title)
+                            location = extract_location(title, config["search"].get("location", "深圳宝安"))
+                            tags = extract_tags(title)
+                            all_listings.append({
+                                "id": generate_id(title, link),
+                                "title": title,
+                                "description": "",
+                                "price": price,
+                                "location": location,
+                                "room_type": room_type,
+                                "tags": tags,
+                                "link": link,
+                                "keyword": keyword,
+                                "published_at": "",
+                                "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            })
+
+                        if note_matches:
+                            print(f"    (HTML fallback: 提取到 {len(note_matches)} 条)")
 
                 except Exception as e:
                     print(f"  提取帖子失败: {e}")
