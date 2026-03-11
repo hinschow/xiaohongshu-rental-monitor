@@ -8,7 +8,9 @@ import re
 
 
 def extract_price(text):
-    """从文本中提取价格"""
+    """从文本中提取价格，排除非租金数字"""
+    exclude_prefix = r'(?:月入|年入|收入|工资|薪资|时薪|日薪|存款|存了|攒了|花了|花费|投入|首付|押金|中介费|服务费|面积|约)\s*'
+
     patterns = [
         r'(\d{4})\s*[-/~至到]\s*(\d{4})\s*(?:元|块|/月)',
         r'(\d{4})\s*(?:元|块)\s*/?\s*月',
@@ -21,6 +23,10 @@ def extract_price(text):
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
+            start = match.start()
+            prefix_text = text[max(0, start - 10):start]
+            if re.search(exclude_prefix + r'$', prefix_text):
+                continue
             price = int(match.group(1))
             # 排除明显不是价格的数字（年份、面积等）
             if 500 <= price <= 20000:

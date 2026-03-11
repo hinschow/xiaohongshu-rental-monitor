@@ -84,6 +84,18 @@ def generate_id(title, link):
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def extract_publish_date(link):
+    """从小红书笔记链接提取发布时间（ID前8位是十六进制时间戳）"""
+    m = re.search(r'/explore/([a-f0-9]{24})', link)
+    if m:
+        try:
+            ts = int(m.group(1)[:8], 16)
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        except (ValueError, OSError):
+            pass
+    return ""
+
+
 def clean_old_data(listings, days=RETENTION_DAYS):
     """清理超过指定天数的旧数据"""
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
@@ -96,18 +108,29 @@ def clean_old_data(listings, days=RETENTION_DAYS):
 
 
 def parse_price_from_text(text):
-    """从文本提取价格"""
+    """从文本提取价格，排除非租金数字（收入、面积、年份等）"""
+    # 先排除：月入/年入/收入/工资/薪资 + 数字 这类表述
+    # 用负向后顾排除这些上下文
+    exclude_prefix = r'(?:月入|年入|收入|工资|薪资|时薪|日薪|存款|存了|攒了|花了|花费|投入|首付|押金|中介费|服务费|面积|约)\s*'
+
     patterns = [
         r'(\d{3,5})\s*[-/~至到]\s*(\d{3,5})\s*(?:元|块|/月)',
         r'(\d{3,5})\s*(?:元|块)/月',
         r'月租?\s*(\d{3,5})',
-        r'(\d{3,5})\s*(?:元|块)',
         r'(?:租金|价格|房租)[：:]\s*(\d{3,5})',
+        r'(\d{3,5})\s*(?:元|块)',
     ]
     for p in patterns:
         m = re.search(p, text)
         if m:
-            return int(m.group(1))
+            start = m.start()
+            # 检查匹配位置之前是否有排除前缀
+            prefix_text = text[max(0, start - 10):start]
+            if re.search(exclude_prefix + r'$', prefix_text):
+                continue
+            price = int(m.group(1))
+            if 500 <= price <= 20000:
+                return price
     return None
 
 
@@ -151,15 +174,26 @@ def extract_tags(text):
 
 def extract_location(text, default="深圳宝安"):
     """从文本提取位置"""
-    location_patterns = [
-        r"(宝安\S{1,6}(?:区|街道|路|地铁))",
-        r"(宝安中心|西乡|固戍|后瑞|碧海|新安|松岗|沙井|福永|石岩|光明)",
-        r"((?:宝安|南山|福田|龙华)\S{0,4})",
+    # 具体地名优先
+    known_places = [
+        "宝安中心", "西乡", "固戍", "后瑞", "碧海", "新安",
+        "松岗", "沙井", "福永", "石岩", "光明", "坪洲",
+        "灵芝", "翻身", "洪浪北", "兴东", "留仙洞", "桃园",
     ]
-    for p in location_patterns:
-        m = re.search(p, text)
-        if m:
-            return m.group(1)
+    for place in known_places:
+        if place in text:
+            return place
+
+    # 区+具体地名（只匹配汉字，遇到数字/标点/动词停止）
+    m = re.search(r"((?:宝安|南山|福田|龙华|龙岗|罗湖|光明|坪山)[·\s]?[\u4e00-\u9fff]{1,4}(?:区|街道|路|地铁|站|湾|城|园))", text)
+    if m:
+        return m.group(1)
+
+    # 仅区名
+    m = re.search(r"(宝安|南山|福田|龙华|龙岗|罗湖|光明|坪山)", text)
+    if m:
+        return m.group(1)
+
     return default
 
 
@@ -232,7 +266,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 continue
 
             print(f"\n  搜索关键词: {keyword}")
-            search_url = f"https://www.xiaohongshu.com/search_result?keyword={quote(keyword)}&source=web_search_result_notes"
+            search_url = f"https://www.xiaohongshu.com/search_result?keyword={quote(keyword)}&source=web_search_result_notes&sort=time"
 
             try:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
@@ -334,7 +368,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                                 "tags": tags,
                                 "link": link,
                                 "keyword": keyword,
-                                "published_at": "",
+                                "published_at": extract_publish_date(link),
                                 "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             }
                             all_listings.append(listing)
@@ -376,7 +410,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                                 "tags": tags,
                                 "link": link,
                                 "keyword": keyword,
-                                "published_at": "",
+                                "published_at": extract_publish_date(link),
                                 "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             })
 
@@ -403,17 +437,32 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                     page.goto(listing["link"], wait_until="domcontentloaded", timeout=15000)
                     time.sleep(random.uniform(1.5, 3))
 
-                    # 提取详情页内容
-                    content_el = page.query_selector("div.note-content, div#detail-desc, div[class*='content']")
-                    if content_el:
-                        detail_text = content_el.inner_text().strip()
+                    # 提取详情页内容 — 用精确选择器避免匹配到导航栏
+                    detail_text = ""
+                    # 小红书笔记详情页的正文选择器（按优先级）
+                    detail_selectors = [
+                        "#detail-desc .note-text",           # 笔记正文区域
+                        "div.note-text",                     # 笔记文本
+                        "#detail-desc",                      # 详情描述容器
+                        "div.note-content .content",         # 内容区
+                        "article",                           # 语义化文章标签
+                    ]
+                    for sel in detail_selectors:
+                        content_el = page.query_selector(sel)
+                        if content_el:
+                            txt = content_el.inner_text().strip()
+                            # 过滤掉导航栏误匹配（"发现\n发布\n通知\n我"）
+                            if txt and len(txt) > 20 and "发现\n发布\n通知" not in txt:
+                                detail_text = txt
+                                break
+
+                    if detail_text:
                         if not listing["price"]:
                             listing["price"] = parse_price_from_text(detail_text)
                         if not listing["room_type"]:
                             listing["room_type"] = parse_room_type(detail_text)
                         if not listing["tags"]:
                             listing["tags"] = extract_tags(detail_text)
-                        # 保存详情页文本
                         listing["detail_text"] = detail_text[:2000]
                 except Exception:
                     continue
@@ -441,6 +490,7 @@ def main():
     parser.add_argument("--headless", action="store_true", default=True, help="无头模式（默认）")
     parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口")
     parser.add_argument("--max-pages", type=int, default=None, help="每个关键词最大翻页数")
+    parser.add_argument("--days", type=int, default=7, help="只保留最近N天内发布的帖子（默认7天）")
     args = parser.parse_args()
 
     headless = not args.no_headless
@@ -465,6 +515,14 @@ def main():
             print("  没有获取到数据，可能需要检查 Cookie 或网络")
             print("=" * 50)
             return
+
+        # 过滤掉太旧的帖子
+        cutoff_date = (datetime.now() - timedelta(days=args.days)).strftime("%Y-%m-%d")
+        before_count = len(new_listings)
+        new_listings = [l for l in new_listings if not l.get("published_at") or l["published_at"] >= cutoff_date]
+        skipped = before_count - len(new_listings)
+        if skipped:
+            print(f"  过滤掉 {skipped} 条超过 {args.days} 天的旧帖子")
 
         # 加载历史数据并去重合并
         all_listings = load_listings()
