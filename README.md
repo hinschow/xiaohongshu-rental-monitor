@@ -55,6 +55,14 @@ XHS_COOKIE=your_cookie_here
 python scripts/scraper.py
 ```
 
+### 3.1 人工扫码/过验证（推荐）
+
+```bash
+python scripts/open_profile.py
+```
+
+这会打开持久化浏览器 profile。你可以在弹出的窗口里手动扫码、登录或过安全验证。完成后关闭窗口即可，后续抓取会复用同一份 profile。
+
 ### 4. 集成到 OpenClaw
 
 将项目 clone 到 OpenClaw workspace：
