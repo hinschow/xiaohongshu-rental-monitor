@@ -46,6 +46,7 @@ LISTINGS_FILE = DATA_DIR / "listings.json"
 NOTIFIED_FILE = DATA_DIR / "notified.json"
 HEALTH_FILE = DATA_DIR / "scrape_health.json"
 KEYWORD_STATE_FILE = DATA_DIR / "keyword_rotation_state.json"
+COOLDOWN_FILE = DATA_DIR / "cooldown_state.json"
 PROFILE_DIR = DATA_DIR / "playwright-profile"
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -120,6 +121,26 @@ def save_keyword_rotation_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def load_cooldown_state():
+    if COOLDOWN_FILE.exists():
+        try:
+            with open(COOLDOWN_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "cooldown_until": None,
+        "reason": None,
+        "consecutive_verification_hits": 0,
+        "last_detected_at": None
+    }
+
+
+def save_cooldown_state(state):
+    with open(COOLDOWN_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
 def split_keywords_into_groups(keywords, group_count=3):
     groups = [[] for _ in range(group_count)]
     for i, kw in enumerate(keywords):
@@ -131,6 +152,103 @@ def generate_id(title, link):
     """根据标题和链接生成稳定的唯一ID"""
     raw = f"{title}|{link}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def now_local():
+    return datetime.now()
+
+
+def parse_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def get_active_cooldown(state, now=None):
+    now = now or now_local()
+    cooldown_until = parse_datetime(state.get("cooldown_until"))
+    if cooldown_until and cooldown_until > now:
+        return cooldown_until
+    return None
+
+
+def trigger_cooldown(reason, cooldown_state, schedule_minutes=None):
+    schedule_minutes = schedule_minutes or [30, 120, 360, 720]
+    hits = int(cooldown_state.get("consecutive_verification_hits", 0)) + 1
+    minutes = schedule_minutes[min(hits - 1, len(schedule_minutes) - 1)]
+    until = now_local() + timedelta(minutes=minutes)
+    cooldown_state.update({
+        "cooldown_until": until.strftime("%Y-%m-%d %H:%M:%S"),
+        "reason": reason,
+        "consecutive_verification_hits": hits,
+        "last_detected_at": now_local().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    save_cooldown_state(cooldown_state)
+    print(f"  ⚠️ 触发自动冷却: {minutes} 分钟 ({reason})，冷却至 {cooldown_state['cooldown_until']}")
+    return cooldown_state
+
+
+def clear_cooldown(cooldown_state):
+    if cooldown_state.get("cooldown_until") or cooldown_state.get("consecutive_verification_hits", 0):
+        cooldown_state.update({
+            "cooldown_until": None,
+            "reason": None,
+            "consecutive_verification_hits": 0,
+            "last_detected_at": cooldown_state.get("last_detected_at")
+        })
+        save_cooldown_state(cooldown_state)
+
+
+def is_verification_page(page):
+    try:
+        page_text = page.inner_text("body")[:3000]
+    except Exception:
+        page_text = ""
+
+    try:
+        page_title = page.title() or ""
+    except Exception:
+        page_title = ""
+
+    current_url = getattr(page, "url", "") or ""
+    combined = f"{page_title}\n{page_text}\n{current_url}"
+    signals = [
+        "安全验证", "验证你是否为真人", "请完成验证", "异常访问",
+        "访问受限", "验证码", "captcha", "secpo", "验证中"
+    ]
+    return any(signal.lower() in combined.lower() for signal in signals)
+
+
+def human_sleep(min_seconds, max_seconds):
+    time.sleep(random.uniform(min_seconds, max_seconds))
+
+
+def warm_up_homepage(page):
+    print("  首页预热中...")
+    page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
+    human_sleep(2.5, 5.5)
+
+    if is_verification_page(page):
+        return False
+
+    try:
+        page.mouse.move(random.randint(200, 900), random.randint(120, 600), steps=random.randint(12, 30))
+    except Exception:
+        pass
+
+    try:
+        for _ in range(random.randint(1, 2)):
+            page.mouse.wheel(0, random.randint(300, 900))
+            human_sleep(0.8, 1.8)
+        page.mouse.wheel(0, -random.randint(150, 500))
+    except Exception:
+        pass
+
+    human_sleep(1.5, 3.5)
+    return not is_verification_page(page)
 
 
 def extract_publish_date(link):
@@ -258,6 +376,10 @@ def is_rental_related(text):
     return any(keyword in text_lower for keyword in rental_keywords)
 
 
+class VerificationBlockedError(RuntimeError):
+    pass
+
+
 def scrape_xiaohongshu(config, headless=True, max_pages=None):
     """
     使用 Playwright 爬取小红书租房信息。
@@ -280,6 +402,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
     pages_limit = max_pages or scraper_config.get("max_pages", 5)
     delay = scraper_config.get("delay_seconds", 2)
     cookie_str = os.getenv("XHS_COOKIE", "")
+    cooldown_state = load_cooldown_state()
 
     keyword_groups = split_keywords_into_groups(keywords, scraper_config.get("keyword_group_count", 3))
     rotation_state = load_keyword_rotation_state()
@@ -322,11 +445,20 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
 
         page = context.pages[0] if context.pages else context.new_page()
 
+        try:
+            if not warm_up_homepage(page):
+                trigger_cooldown("homepage_verification", cooldown_state)
+                raise VerificationBlockedError("首页预热阶段命中安全验证，立即停止本轮抓取")
+        except VerificationBlockedError:
+            raise
+        except Exception as e:
+            print(f"  首页预热失败，继续谨慎执行: {e}")
+
         # 如果有 Cookie，先访问首页让 Cookie 生效
         if cookie_str:
             try:
                 page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=20000)
-                time.sleep(random.uniform(1, 2))
+                human_sleep(1, 2)
             except Exception:
                 pass
 
@@ -342,10 +474,14 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
 
             try:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                time.sleep(random.uniform(4.5, 8.5))
+                human_sleep(4.5, 8.5)
             except Exception as e:
                 print(f"  访问搜索页失败: {e}")
                 continue
+
+            if is_verification_page(page):
+                trigger_cooldown("search_verification", cooldown_state)
+                raise VerificationBlockedError(f"关键词 '{keyword}' 命中安全验证，立即停止本轮抓取")
 
             # 处理登录弹窗 — 小红书搜索必须登录
             login_modal = page.query_selector('div.login-container, div[class*="login-modal"], div[class*="loginContainer"]')
@@ -363,7 +499,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 # 有 Cookie 但还是弹登录 → Cookie 过期
                 # 尝试关闭弹窗看看
                 page.keyboard.press("Escape")
-                time.sleep(1)
+                human_sleep(0.8, 1.4)
                 login_still = page.query_selector('div.login-container, div[class*="login-modal"]')
                 if login_still and login_still.is_visible():
                     print("  ⚠️ Cookie 已过期，请重新获取")
@@ -376,9 +512,13 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 text_tab = page.query_selector('div.search-tab span:has-text("图文"), a:has-text("图文")')
                 if text_tab:
                     text_tab.click()
-                    time.sleep(random.uniform(1, 2))
+                    human_sleep(1, 2)
             except Exception:
                 pass
+
+            if is_verification_page(page):
+                trigger_cooldown("tab_switch_verification", cooldown_state)
+                raise VerificationBlockedError(f"关键词 '{keyword}' 切换图文后命中安全验证，立即停止本轮抓取")
 
             # 调试：保存截图和HTML
             try:
@@ -396,6 +536,10 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             # 滚动加载更多
             loaded_pages = 0
             while loaded_pages < pages_limit:
+                if is_verification_page(page):
+                    trigger_cooldown("pagination_verification", cooldown_state)
+                    raise VerificationBlockedError(f"关键词 '{keyword}' 翻页阶段命中安全验证，立即停止本轮抓取")
+
                 # 提取当前页面的帖子
                 try:
                     # 小红书搜索结果选择器（多种尝试）
@@ -532,7 +676,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 if loaded_pages < pages_limit:
                     # 滚动加载更多
                     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    time.sleep(random.uniform(delay + 2, delay + 6))
+                    human_sleep(delay + 2, delay + 6)
 
             print(f"  关键词 '{keyword}' 获取 {len([l for l in all_listings if l['keyword'] == keyword])} 条")
 
@@ -543,7 +687,11 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             for listing in missing_price[:10]:
                 try:
                     page.goto(listing["link"], wait_until="domcontentloaded", timeout=15000)
-                    time.sleep(random.uniform(1.5, 3))
+                    human_sleep(1.5, 3)
+
+                    if is_verification_page(page):
+                        trigger_cooldown("detail_verification", cooldown_state)
+                        raise VerificationBlockedError("详情页补全阶段命中安全验证，立即停止本轮抓取")
 
                     # 提取详情页内容 — 用精确选择器避免匹配到导航栏
                     detail_text = ""
@@ -576,6 +724,9 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                     continue
 
         context.close()
+
+    if all_listings:
+        clear_cooldown(cooldown_state)
 
     print(f"\n  总计获取 {len(all_listings)} 条帖子")
     return all_listings
@@ -615,11 +766,29 @@ def main():
         print(f"  房型: {config['filters']['room_type']}")
         print(f"  关键词总数: {len(config['search']['keywords'])}")
 
-        # 爬取数据
-        new_listings = scrape_xiaohongshu(config, headless=headless, max_pages=args.max_pages)
-        print(f"✓ 爬取完成，获取 {len(new_listings)} 条数据")
-
         health = load_health_state()
+        cooldown_state = load_cooldown_state()
+        active_cooldown = get_active_cooldown(cooldown_state)
+        if active_cooldown:
+            health["last_status"] = "cooldown"
+            save_health_state(health)
+            print(f"⏸️ 当前处于自动冷却期，跳过本轮抓取")
+            print(f"  原因: {cooldown_state.get('reason')}")
+            print(f"  冷却至: {active_cooldown.strftime('%Y-%m-%d %H:%M:%S')}")
+            print("=" * 50)
+            return
+
+        # 爬取数据
+        try:
+            new_listings = scrape_xiaohongshu(config, headless=headless, max_pages=args.max_pages)
+        except VerificationBlockedError as e:
+            health["last_status"] = "verification_blocked"
+            save_health_state(health)
+            print(f"⚠️ {e}")
+            print("=" * 50)
+            return
+
+        print(f"✓ 爬取完成，获取 {len(new_listings)} 条数据")
 
         if not new_listings:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
