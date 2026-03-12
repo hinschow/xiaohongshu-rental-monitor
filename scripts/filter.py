@@ -7,6 +7,21 @@
 import re
 
 
+DEMAND_PATTERNS = [
+    r"\b求租\b",
+    r"\b求房\b",
+    r"\b找房\b",
+    r"\b蹲租\b",
+    r"\b蹲转租\b",
+    r"\b求推荐\b",
+    r"\b预算\s*\d{3,5}\b",
+    r"房东看过来",
+    r"有没有.*(?:转租|直租|出租)",
+    r"想租",
+    r"求.*(?:一房|两房|整租|转租|直租)",
+]
+
+
 def extract_price(text):
     """从文本中提取价格，排除非租金数字"""
     exclude_prefix = r'(?:月入|年入|收入|工资|薪资|时薪|日薪|存款|存了|攒了|花了|花费|投入|首付|押金|中介费|服务费|面积|约)\s*'
@@ -107,6 +122,15 @@ def has_rental_keywords(text):
     return any(keyword in text_lower for keyword in rental_keywords)
 
 
+def is_demand_post(text):
+    """识别求租/找房/蹲房这类需求帖，避免误推送。"""
+    normalized = re.sub(r"\s+", "", text.lower())
+    for pattern in DEMAND_PATTERNS:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            return True
+    return False
+
+
 def filter_listings(listings, config):
     """筛选房源
 
@@ -126,6 +150,10 @@ def filter_listings(listings, config):
 
         # 排除关键词（始终生效）
         if has_exclude_keywords(full_text, exclude_keywords):
+            continue
+
+        # 排除需求帖：求租/找房/蹲转租/房东看过来 等
+        if is_demand_post(full_text):
             continue
 
         # 价格筛选

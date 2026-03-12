@@ -900,7 +900,15 @@ def main():
 
         config = load_config()
         print(f"✓ 配置加载成功")
-        print(f"  价格范围: {config['filters']['price_min']}-{config['filters']['price_max']}元/月")
+        price_min = config['filters'].get('price_min')
+        price_max = config['filters'].get('price_max')
+        if price_min is None and price_max is None:
+            price_range_text = "不限（未标价房源也允许推送）"
+        else:
+            low = "不限" if price_min is None else str(price_min)
+            high = "不限" if price_max is None else str(price_max)
+            price_range_text = f"{low}-{high}元/月"
+        print(f"  价格范围: {price_range_text}")
         print(f"  房型: {config['filters']['room_type']}")
         print(f"  关键词总数: {len(config['search']['keywords'])}")
 
