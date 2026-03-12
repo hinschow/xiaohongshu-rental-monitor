@@ -226,12 +226,34 @@ def human_sleep(min_seconds, max_seconds):
     time.sleep(random.uniform(min_seconds, max_seconds))
 
 
+def save_verification_artifacts(page, stage, keyword=None):
+    timestamp = now_local().strftime("%Y%m%d_%H%M%S")
+    safe_keyword = re.sub(r'[^\w\u4e00-\u9fff-]+', '_', (keyword or 'no_keyword'))[:20]
+    base_name = f"verification_{stage}_{safe_keyword}_{timestamp}"
+    screenshot_path = DATA_DIR / f"{base_name}.png"
+    html_path = DATA_DIR / f"{base_name}.html"
+
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        print(f"  🖼️ 验证页截图已保存: {screenshot_path}")
+    except Exception as e:
+        print(f"  保存验证页截图失败: {e}")
+
+    try:
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(page.content())
+        print(f"  🧾 验证页 HTML 已保存: {html_path}")
+    except Exception as e:
+        print(f"  保存验证页 HTML 失败: {e}")
+
+
 def warm_up_homepage(page):
     print("  首页预热中...")
     page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
     human_sleep(2.5, 5.5)
 
     if is_verification_page(page):
+        save_verification_artifacts(page, "homepage")
         return False
 
     try:
@@ -480,6 +502,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 continue
 
             if is_verification_page(page):
+                save_verification_artifacts(page, "search", keyword)
                 trigger_cooldown("search_verification", cooldown_state)
                 raise VerificationBlockedError(f"关键词 '{keyword}' 命中安全验证，立即停止本轮抓取")
 
@@ -517,6 +540,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 pass
 
             if is_verification_page(page):
+                save_verification_artifacts(page, "tab_switch", keyword)
                 trigger_cooldown("tab_switch_verification", cooldown_state)
                 raise VerificationBlockedError(f"关键词 '{keyword}' 切换图文后命中安全验证，立即停止本轮抓取")
 
@@ -537,6 +561,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             loaded_pages = 0
             while loaded_pages < pages_limit:
                 if is_verification_page(page):
+                    save_verification_artifacts(page, "pagination", keyword)
                     trigger_cooldown("pagination_verification", cooldown_state)
                     raise VerificationBlockedError(f"关键词 '{keyword}' 翻页阶段命中安全验证，立即停止本轮抓取")
 
@@ -690,6 +715,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                     human_sleep(1.5, 3)
 
                     if is_verification_page(page):
+                        save_verification_artifacts(page, "detail", listing.get("keyword"))
                         trigger_cooldown("detail_verification", cooldown_state)
                         raise VerificationBlockedError("详情页补全阶段命中安全验证，立即停止本轮抓取")
 
