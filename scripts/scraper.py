@@ -575,7 +575,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 except Exception:
                     continue
 
-        browser.close()
+        context.close()
 
     print(f"\n  总计获取 {len(all_listings)} 条帖子")
     return all_listings
