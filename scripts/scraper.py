@@ -9,9 +9,10 @@
 Usage:
     python scripts/scraper.py
     python scripts/scraper.py --headless
+    python scripts/scraper.py --no-headless
     python scripts/scraper.py --max-pages 3
 
-默认使用非无头模式，尽量更接近真人浏览器行为。
+默认使用非无头模式，优先保证通过率；需要测试后台模式时再显式加 --headless。
 """
 
 import sys
@@ -884,8 +885,8 @@ def merge_listings(existing, new_listings):
 
 def main():
     parser = argparse.ArgumentParser(description="小红书租房爬虫")
-    parser.add_argument("--headless", action="store_true", help="使用无头模式")
-    parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口（默认）")
+    parser.add_argument("--headless", action="store_true", help="使用无头模式（更适合实验性后台运行，但可能更容易触发风控）")
+    parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口（默认，更稳）")
     parser.add_argument("--max-pages", type=int, default=None, help="每个关键词最大翻页数")
     parser.add_argument("--days", type=int, default=7, help="只保留最近N天内发布的帖子（默认7天）")
     args = parser.parse_args()

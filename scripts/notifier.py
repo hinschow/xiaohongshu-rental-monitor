@@ -2,16 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 通知发送模块
+
+说明：这里不直接调用 Telegram API。
+在 OpenClaw 场景下，脚本只负责把整理好的通知内容打印出来，
+再由上层会话/cron agent 读取输出并通过当前聊天通道转发给用户。
 """
 
 import sys
 import io
-import os
-
-try:
-    import requests
-except ImportError:
-    requests = None
 
 # 强制 UTF-8 编码
 if sys.platform == "win32" and sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
@@ -61,53 +59,17 @@ def format_notification(listing):
     return "\n".join(lines)
 
 
-def send_telegram_message(message, timeout=20):
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-
-    if not bot_token:
-        raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN，无法发送 Telegram 通知")
-    if not chat_id:
-        raise RuntimeError("缺少 TELEGRAM_CHAT_ID，无法发送 Telegram 通知")
-    if requests is None:
-        raise RuntimeError("未安装 requests，无法发送 Telegram 通知")
-
-    api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    resp = requests.post(
-        api_url,
-        json={
-            "chat_id": chat_id,
-            "text": message,
-            "disable_web_page_preview": True,
-        },
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegram API 返回失败: {data}")
-    return data
-
-
 def send_notifications(listings, config):
-    """发送通知：优先真实 Telegram 推送；失败时打印错误。"""
+    """输出通知内容，供 OpenClaw 会话直接转发。"""
     if not config['notification']['enabled']:
         print("通知已禁用")
         return
 
-    sent_count = 0
-    for listing in listings:
+    for idx, listing in enumerate(listings, start=1):
         message = format_notification(listing)
         print("\n" + "=" * 50)
-        print("准备发送通知:")
+        print(f"通知候选 {idx}/{len(listings)}:")
         print(message)
         print("=" * 50)
 
-        try:
-            send_telegram_message(message)
-            sent_count += 1
-            print("✓ Telegram 发送成功")
-        except Exception as e:
-            print(f"✗ Telegram 发送失败: {e}")
-
-    print(f"\n✓ 成功发送 {sent_count}/{len(listings)} 条通知")
+    print(f"\n✓ 已生成 {len(listings)} 条通知内容（等待 OpenClaw 转发）")

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
 from datetime import datetime
 
-from filter import extract_price, match_room_type, has_exclude_keywords, is_demand_post, filter_listings
+from filter import extract_price, match_room_type, has_exclude_keywords, is_demand_post, is_stale_listing, filter_listings
 from scraper import get_active_cooldown, is_verification_page
 
 
@@ -71,6 +71,13 @@ def test_filter_listings_keeps_unknown_price_but_rejects_demand_posts():
     assert filtered[0]["title"] == "宝安中心两房一厅房东直租"
     assert filtered[0].get("price_unknown") == True
     print("✓ 保留未标价房源并过滤需求帖测试通过")
+
+
+def test_is_stale_listing():
+    assert is_stale_listing("【已转租】宝安中心两房一厅") == True
+    assert is_stale_listing("已搬走，房子转出") == True
+    assert is_stale_listing("宝安中心两房一厅房东直租") == False
+    print("✓ 失效帖识别测试通过")
 
 
 def test_get_active_cooldown():
@@ -167,6 +174,7 @@ if __name__ == "__main__":
     test_exclude_keywords()
     test_is_demand_post()
     test_filter_listings_keeps_unknown_price_but_rejects_demand_posts()
+    test_is_stale_listing()
     test_get_active_cooldown()
     test_is_verification_page()
     test_notification_format()

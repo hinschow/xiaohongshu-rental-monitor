@@ -59,6 +59,22 @@ XHS_USE_ENV_COOKIE=true
 
 > 注意：即使设置了 `XHS_COOKIE`，脚本现在也**默认不会自动注入**；只有显式设置 `XHS_USE_ENV_COOKIE=true` 才会启用，避免旧 Cookie 污染已经可用的持久化 profile。
 
+### 3. 日常运行
+
+当前更稳的方式仍然是默认可视模式：
+
+```bash
+python scripts/scraper.py --max-pages 1
+```
+
+如果你要测试后台无头运行，可以显式开启：
+
+```bash
+python scripts/scraper.py --headless --max-pages 1
+```
+
+> 实测无头模式在小红书搜索页更容易触发验证，因此目前推荐把 `--headless` 视为实验选项，而不是默认方案。
+
 ### 3. 测试运行
 
 ```bash
@@ -139,16 +155,15 @@ xiaohongshu-rental-monitor/
 🔗 链接：https://www.xiaohongshu.com/explore/xxxx
 ```
 
-## Telegram 配置
+## OpenClaw 通知模式
 
-在 `.env` 中配置：
+本项目当前按 **OpenClaw 内发消息** 设计：
 
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
-```
+- 脚本负责抓取、筛选、格式化通知内容
+- 通知内容打印到标准输出
+- 由上层 OpenClaw 会话 / cron agent 读取并转发到当前聊天
 
-如果未配置 `TELEGRAM_BOT_TOKEN`，脚本将无法真正发送 Telegram 通知。
+因此**不需要**在项目里额外配置 Telegram Bot Token。
 
 ## 注意事项
 

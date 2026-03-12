@@ -21,6 +21,18 @@ DEMAND_PATTERNS = [
     r"求.*(?:一房|两房|整租|转租|直租)",
 ]
 
+STALE_PATTERNS = [
+    r"已转租",
+    r"已租",
+    r"已出",
+    r"已出租",
+    r"已无",
+    r"已搬走",
+    r"已转出",
+    r"转租成功",
+    r"已找到租客",
+]
+
 
 def extract_price(text):
     """从文本中提取价格，排除非租金数字"""
@@ -131,6 +143,15 @@ def is_demand_post(text):
     return False
 
 
+def is_stale_listing(text):
+    """识别已转租/已租出/已无房源等失效帖。"""
+    normalized = re.sub(r"\s+", "", text.lower())
+    for pattern in STALE_PATTERNS:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            return True
+    return False
+
+
 def filter_listings(listings, config):
     """筛选房源
 
@@ -154,6 +175,10 @@ def filter_listings(listings, config):
 
         # 排除需求帖：求租/找房/蹲转租/房东看过来 等
         if is_demand_post(full_text):
+            continue
+
+        # 排除失效帖：已转租 / 已出租 / 已无 等
+        if is_stale_listing(full_text):
             continue
 
         # 价格筛选
