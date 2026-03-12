@@ -72,13 +72,13 @@ def calculate_score(listing, config):
             else:
                 score += 3
 
-    # 价格越接近中间值越好
+    # 价格越接近中间值越好（如果设置了价格范围）
     price = listing.get('price', 0)
-    price_min = config['filters']['price_min']
-    price_max = config['filters']['price_max']
-    price_mid = (price_min + price_max) / 2
+    price_min = config['filters'].get('price_min')
+    price_max = config['filters'].get('price_max')
 
-    if price:
+    if price and price_min is not None and price_max is not None:
+        price_mid = (price_min + price_max) / 2
         if price_min <= price <= price_max:
             price_diff = abs(price - price_mid)
             score += max(0, 10 - price_diff / 50)
@@ -94,6 +94,17 @@ def calculate_score(listing, config):
         score += 5
 
     return round(score, 1)
+
+
+def has_rental_keywords(text):
+    """检查是否包含租房相关关键词"""
+    rental_keywords = [
+        "出租", "转租", "直租", "租房", "房东", "整租", "合租",
+        "民房", "城中村", "农民房", "一房", "两房", "三房",
+        "室", "厅", "卫", "阳台", "月租", "押金", "中介"
+    ]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in rental_keywords)
 
 
 def filter_listings(listings, config):
@@ -124,10 +135,14 @@ def filter_listings(listings, config):
             if price:
                 listing['price'] = price
 
-        if price:
-            if price < filters['price_min'] or price > filters['price_max']:
+        # 如果设置了价格范围，进行筛选
+        price_min = filters.get('price_min')
+        price_max = filters.get('price_max')
+        
+        if price and price_min is not None and price_max is not None:
+            if price < price_min or price > price_max:
                 continue
-        else:
+        elif not price:
             # 无价格：标记但允许通过
             listing['price_unknown'] = True
 

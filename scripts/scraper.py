@@ -197,6 +197,18 @@ def extract_location(text, default="深圳宝安"):
     return default
 
 
+def is_rental_related(text):
+    """检查文本是否与租房相关（必须包含租房关键词）"""
+    rental_keywords = [
+        "出租", "转租", "直租", "租房", "房东", "整租", "合租",
+        "民房", "城中村", "农民房", "一房", "两房", "三房", "单间",
+        "室", "厅", "卫", "阳台", "月租", "押金", "租金", "房租"
+    ]
+    text_lower = text.lower()
+    # 至少包含一个租房关键词
+    return any(keyword in text_lower for keyword in rental_keywords)
+
+
 def scrape_xiaohongshu(config, headless=True, max_pages=None):
     """
     使用 Playwright 爬取小红书租房信息。
@@ -308,6 +320,19 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             except Exception:
                 pass
 
+            # 调试：保存截图和HTML
+            try:
+                screenshot_path = DATA_DIR / f"debug_screenshot_{keyword[:10].replace(' ', '_')}.png"
+                page.screenshot(path=str(screenshot_path))
+                print(f"    截图已保存: {screenshot_path}")
+                
+                html_path = DATA_DIR / f"debug_html_{keyword[:10].replace(' ', '_')}.html"
+                with open(html_path, 'w', encoding='utf-8') as f:
+                    f.write(page.content())
+                print(f"    HTML已保存: {html_path}")
+            except Exception as e:
+                print(f"    保存调试文件失败: {e}")
+
             # 滚动加载更多
             loaded_pages = 0
             while loaded_pages < pages_limit:
@@ -315,11 +340,14 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 try:
                     # 小红书搜索结果选择器（多种尝试）
                     cards = page.query_selector_all('section.note-item, div[class*="note-item"]')
+                    print(f"    尝试选择器1: 找到 {len(cards)} 个 cards")
                     if not cards:
                         cards = page.query_selector_all('div.feeds-page section, div[class*="feeds"] section')
+                        print(f"    尝试选择器2: 找到 {len(cards)} 个 cards")
                     if not cards:
                         # 最宽泛：任何包含笔记链接的容器
                         cards = page.query_selector_all('a[href*="/explore/"], a[href*="/search_result/"]')
+                        print(f"    尝试选择器3 (链接): 找到 {len(cards)} 个 cards")
 
                     for card in cards:
                         try:
@@ -336,21 +364,36 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                                 elif href.startswith("http"):
                                     link = href
 
-                            if not link or link in seen_links:
+                            if not link:
+                                print(f"      跳过: 无链接")
+                                continue
+                            if link in seen_links:
+                                print(f"      跳过: 重复链接")
                                 continue
                             seen_links.add(link)
 
                             # 提取标题
                             title_el = card.query_selector("a.title span, span.title, div.title, a.title")
                             title = title_el.inner_text().strip() if title_el else ""
+                            
+                            if not title:
+                                print(f"      跳过: 无标题 - {link}")
+                                continue
 
                             # 提取摘要/描述
                             desc_el = card.query_selector("div.desc, span.desc, p")
                             desc = desc_el.inner_text().strip() if desc_el else ""
 
                             full_text = f"{title} {desc}"
-                            if not title:
+                            
+                            print(f"      检查: {title[:30]}...")
+
+                            # ⚠️ 关键验证：必须包含租房关键词，否则跳过
+                            if not is_rental_related(full_text):
+                                print(f"        ✗ 不包含租房关键词")
                                 continue
+                            
+                            print(f"        ✓ 包含租房关键词")
 
                             # 解析结构化字段
                             price = parse_price_from_text(full_text)
@@ -396,6 +439,11 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                                 continue
                             seen_links.add(link)
                             title = title.strip() if title else f"小红书笔记 {href.split('/')[-1]}"
+                            
+                            # ⚠️ 关键验证：必须包含租房关键词
+                            if not is_rental_related(title):
+                                continue
+                            
                             price = parse_price_from_text(title)
                             room_type = parse_room_type(title)
                             location = extract_location(title, config["search"].get("location", "深圳宝安"))
