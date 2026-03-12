@@ -141,6 +141,26 @@ def test_is_verification_page():
     print("✓ 验证页识别测试通过")
 
 
+def test_notification_format():
+    from notifier import format_notification
+    listing = {
+        "title": "宝安中心两房一厅房东直租",
+        "description": "近地铁，精装修，拎包入住",
+        "location": "宝安中心",
+        "price": None,
+        "room_type": "2室1厅",
+        "published_at": "2026-03-12",
+        "tags": ["近地铁", "精装修"],
+        "link": "https://www.xiaohongshu.com/explore/test"
+    }
+    message = format_notification(listing)
+    assert "📝 标题：宝安中心两房一厅房东直租" in message
+    assert "📄 摘要：近地铁，精装修，拎包入住" in message
+    assert "💰 价格：未标价" in message
+    assert "🔗 链接：https://www.xiaohongshu.com/explore/test" in message
+    print("✓ 通知格式测试通过")
+
+
 if __name__ == "__main__":
     test_extract_price()
     test_match_room_type()
@@ -149,4 +169,5 @@ if __name__ == "__main__":
     test_filter_listings_keeps_unknown_price_but_rejects_demand_posts()
     test_get_active_cooldown()
     test_is_verification_page()
+    test_notification_format()
     print("\n所有测试通过！")

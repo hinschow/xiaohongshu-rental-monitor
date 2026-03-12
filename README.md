@@ -127,6 +127,8 @@ xiaohongshu-rental-monitor/
 ```
 🏠 新房源提醒
 
+📝 标题：宝安中心两房一厅房东直租
+📄 摘要：近地铁，精装修，拎包入住...
 📍 位置：宝安中心区
 💰 价格：3200元/月
 🏡 房型：2室1厅
@@ -134,8 +136,19 @@ xiaohongshu-rental-monitor/
 
 ✨ 亮点：近地铁、精装修
 
-🔗 查看详情：[小红书链接]
+🔗 链接：https://www.xiaohongshu.com/explore/xxxx
 ```
+
+## Telegram 配置
+
+在 `.env` 中配置：
+
+```env
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
+如果未配置 `TELEGRAM_BOT_TOKEN`，脚本将无法真正发送 Telegram 通知。
 
 ## 注意事项
 
