@@ -75,6 +75,19 @@ python scripts/scraper.py --headless --max-pages 1
 
 > 实测无头模式在小红书搜索页更容易触发验证，因此目前推荐把 `--headless` 视为实验选项，而不是默认方案。
 
+### 4. OpenClaw 一键运行摘要
+
+如果是给 OpenClaw 会话调用，推荐直接运行：
+
+```bash
+python scripts/run_monitor_once.py --max-pages 1
+```
+
+它会：
+- 执行一轮抓取
+- 把本轮状态写入 `data/latest_run_summary.json`
+- 在控制台输出一段适合直接转发给用户的摘要
+
 ### 3. 测试运行
 
 ```bash

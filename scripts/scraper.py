@@ -48,6 +48,7 @@ NOTIFIED_FILE = DATA_DIR / "notified.json"
 HEALTH_FILE = DATA_DIR / "scrape_health.json"
 KEYWORD_STATE_FILE = DATA_DIR / "keyword_rotation_state.json"
 COOLDOWN_FILE = DATA_DIR / "cooldown_state.json"
+RUN_SUMMARY_FILE = DATA_DIR / "latest_run_summary.json"
 PROFILE_DIR = DATA_DIR / "playwright-profile"
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -140,6 +141,11 @@ def load_cooldown_state():
 def save_cooldown_state(state):
     with open(COOLDOWN_FILE, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def save_run_summary(summary):
+    with open(RUN_SUMMARY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
 def split_keywords_into_groups(keywords, group_count=3):
@@ -883,6 +889,22 @@ def merge_listings(existing, new_listings):
     return list(by_id.values())
 
 
+def build_compact_listing(listing):
+    return {
+        "id": listing.get("id"),
+        "title": listing.get("title"),
+        "description": listing.get("description"),
+        "price": listing.get("price"),
+        "location": listing.get("location"),
+        "room_type": listing.get("room_type"),
+        "published_at": listing.get("published_at"),
+        "tags": listing.get("tags", []),
+        "link": listing.get("link"),
+        "score": listing.get("score"),
+        "keyword": listing.get("keyword"),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="小红书租房爬虫")
     parser.add_argument("--headless", action="store_true", help="使用无头模式（更适合实验性后台运行，但可能更容易触发风控）")
@@ -893,13 +915,30 @@ def main():
 
     headless = bool(args.headless and not args.no_headless)
 
+    started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    summary = {
+        "started_at": started_at,
+        "status": "running",
+        "headless": headless,
+        "reason": None,
+        "keywords_total": 0,
+        "fetched": 0,
+        "filtered": 0,
+        "new_notifications": 0,
+        "total_listings": 0,
+        "cooldown": None,
+        "new_items": [],
+    }
+    save_run_summary(summary)
+
     try:
         print("=" * 50)
         print("小红书租房监控启动")
-        print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"时间: {started_at}")
         print("=" * 50)
 
         config = load_config()
+        summary["keywords_total"] = len(config['search']['keywords'])
         print(f"✓ 配置加载成功")
         price_min = config['filters'].get('price_min')
         price_max = config['filters'].get('price_max')
@@ -919,6 +958,12 @@ def main():
         if active_cooldown:
             health["last_status"] = "cooldown"
             save_health_state(health)
+            summary.update({
+                "status": "cooldown",
+                "reason": cooldown_state.get('reason'),
+                "cooldown": active_cooldown.strftime('%Y-%m-%d %H:%M:%S')
+            })
+            save_run_summary(summary)
             print(f"⏸️ 当前处于自动冷却期，跳过本轮抓取")
             print(f"  原因: {cooldown_state.get('reason')}")
             print(f"  冷却至: {active_cooldown.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -931,10 +976,16 @@ def main():
         except VerificationBlockedError as e:
             health["last_status"] = "verification_blocked"
             save_health_state(health)
+            summary.update({
+                "status": "verification_blocked",
+                "reason": str(e)
+            })
+            save_run_summary(summary)
             print(f"⚠️ {e}")
             print("=" * 50)
             return
 
+        summary["fetched"] = len(new_listings)
         print(f"✓ 爬取完成，获取 {len(new_listings)} 条数据")
 
         if not new_listings:
@@ -944,12 +995,19 @@ def main():
             health["last_status"] = "empty"
             save_health_state(health)
 
+            summary.update({
+                "status": "empty",
+                "reason": "no_listings_fetched"
+            })
+
             print("  没有获取到数据，可能需要检查 Cookie 或网络")
             if health["consecutive_empty_runs"] >= 2 and health.get("last_alerted_empty_count", 0) < health["consecutive_empty_runs"]:
                 print("\n⚠️ 小红书爬虫连续 2 次以上返回 0 条数据，且最新调试页已出现安全验证。")
                 print("⚠️ 基本可确定是登录态 / 风控问题。优先检查 playwright-profile 是否仍有效；如需回退 Cookie 模式，再更新 .env 里的 XHS_COOKIE 并开启 XHS_USE_ENV_COOKIE=true。")
                 health["last_alerted_empty_count"] = health["consecutive_empty_runs"]
                 save_health_state(health)
+                summary["reason"] = "empty_runs_and_possible_login_issue"
+            save_run_summary(summary)
             print("=" * 50)
             return
 
@@ -979,6 +1037,7 @@ def main():
         # 筛选
         from filter import filter_listings
         filtered = filter_listings(new_listings, config)
+        summary["filtered"] = len(filtered)
         print(f"✓ 筛选完成，符合条件 {len(filtered)} 条")
 
         # 找出未通知的新房源
@@ -1003,11 +1062,24 @@ def main():
         # 保存
         save_listings(all_listings)
 
+        summary.update({
+            "status": "ok",
+            "new_notifications": len(new_to_notify),
+            "total_listings": len(all_listings),
+            "new_items": [build_compact_listing(item) for item in new_to_notify[:10]]
+        })
+        save_run_summary(summary)
+
         print("=" * 50)
         print(f"监控完成 · 总房源 {len(all_listings)} · 本次筛出 {len(filtered)} · 新通知 {len(new_to_notify)}")
         print("=" * 50)
 
     except Exception as e:
+        summary.update({
+            "status": "error",
+            "reason": str(e)
+        })
+        save_run_summary(summary)
         print(f"❌ 错误: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
