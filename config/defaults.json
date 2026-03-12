@@ -42,6 +42,7 @@
   "scraper": {
     "max_pages": 5,
     "delay_seconds": 2,
+    "keyword_group_count": 3,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
   }
 }

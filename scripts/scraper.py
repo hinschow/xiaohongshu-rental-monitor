@@ -45,8 +45,11 @@ DATA_DIR = ROOT_DIR / "data"
 LISTINGS_FILE = DATA_DIR / "listings.json"
 NOTIFIED_FILE = DATA_DIR / "notified.json"
 HEALTH_FILE = DATA_DIR / "scrape_health.json"
+KEYWORD_STATE_FILE = DATA_DIR / "keyword_rotation_state.json"
+PROFILE_DIR = DATA_DIR / "playwright-profile"
 
 DATA_DIR.mkdir(exist_ok=True)
+PROFILE_DIR.mkdir(exist_ok=True)
 
 # 数据保留天数
 RETENTION_DAYS = 30
@@ -100,6 +103,28 @@ def load_health_state():
 def save_health_state(state):
     with open(HEALTH_FILE, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def load_keyword_rotation_state():
+    if KEYWORD_STATE_FILE.exists():
+        try:
+            with open(KEYWORD_STATE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"next_group_index": 0}
+
+
+def save_keyword_rotation_state(state):
+    with open(KEYWORD_STATE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def split_keywords_into_groups(keywords, group_count=3):
+    groups = [[] for _ in range(group_count)]
+    for i, kw in enumerate(keywords):
+        groups[i % group_count].append(kw)
+    return [g for g in groups if g]
 
 
 def generate_id(title, link):
@@ -256,12 +281,23 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
     delay = scraper_config.get("delay_seconds", 2)
     cookie_str = os.getenv("XHS_COOKIE", "")
 
+    keyword_groups = split_keywords_into_groups(keywords, scraper_config.get("keyword_group_count", 3))
+    rotation_state = load_keyword_rotation_state()
+    group_index = rotation_state.get("next_group_index", 0) % max(len(keyword_groups), 1)
+    active_keywords = keyword_groups[group_index] if keyword_groups else keywords
+    rotation_state["next_group_index"] = (group_index + 1) % max(len(keyword_groups), 1)
+    save_keyword_rotation_state(rotation_state)
+
     all_listings = []
     seen_links = set()
 
+    print(f"  本轮关键词分组: {group_index + 1}/{len(keyword_groups)}")
+    print(f"  本轮执行关键词: {', '.join(active_keywords)}")
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=str(PROFILE_DIR),
+            headless=headless,
             user_agent=scraper_config.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
             viewport={"width": 1280, "height": 800},
             locale="zh-CN",
@@ -284,7 +320,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 context.add_cookies(cookies)
                 print(f"  已注入 {len(cookies)} 个 Cookie")
 
-        page = context.new_page()
+        page = context.pages[0] if context.pages else context.new_page()
 
         # 如果有 Cookie，先访问首页让 Cookie 生效
         if cookie_str:
@@ -296,7 +332,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
 
         login_blocked = False
 
-        for keyword in keywords:
+        for keyword in active_keywords:
             if login_blocked:
                 print(f"  跳过 '{keyword}' (需要登录)")
                 continue
@@ -577,7 +613,7 @@ def main():
         print(f"✓ 配置加载成功")
         print(f"  价格范围: {config['filters']['price_min']}-{config['filters']['price_max']}元/月")
         print(f"  房型: {config['filters']['room_type']}")
-        print(f"  关键词: {', '.join(config['search']['keywords'])}")
+        print(f"  关键词总数: {len(config['search']['keywords'])}")
 
         # 爬取数据
         new_listings = scrape_xiaohongshu(config, headless=headless, max_pages=args.max_pages)
