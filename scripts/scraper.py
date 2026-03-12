@@ -42,6 +42,7 @@ CONFIG_FILE = ROOT_DIR / "config" / "defaults.json"
 DATA_DIR = ROOT_DIR / "data"
 LISTINGS_FILE = DATA_DIR / "listings.json"
 NOTIFIED_FILE = DATA_DIR / "notified.json"
+HEALTH_FILE = DATA_DIR / "scrape_health.json"
 
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -76,6 +77,27 @@ def load_notified():
 def save_notified(notified_ids):
     with open(NOTIFIED_FILE, 'w', encoding='utf-8') as f:
         json.dump(notified_ids, f, ensure_ascii=False, indent=2)
+
+
+def load_health_state():
+    if HEALTH_FILE.exists():
+        try:
+            with open(HEALTH_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "consecutive_empty_runs": 0,
+        "last_empty_run_at": None,
+        "last_successful_run_at": None,
+        "last_alerted_empty_count": 0,
+        "last_status": "unknown"
+    }
+
+
+def save_health_state(state):
+    with open(HEALTH_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
 
 def generate_id(title, link):
@@ -559,10 +581,29 @@ def main():
         new_listings = scrape_xiaohongshu(config, headless=headless, max_pages=args.max_pages)
         print(f"✓ 爬取完成，获取 {len(new_listings)} 条数据")
 
+        health = load_health_state()
+
         if not new_listings:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            health["consecutive_empty_runs"] = int(health.get("consecutive_empty_runs", 0)) + 1
+            health["last_empty_run_at"] = now_str
+            health["last_status"] = "empty"
+            save_health_state(health)
+
             print("  没有获取到数据，可能需要检查 Cookie 或网络")
+            if health["consecutive_empty_runs"] >= 2 and health.get("last_alerted_empty_count", 0) < health["consecutive_empty_runs"]:
+                print("\n⚠️ 小红书爬虫连续 2 次以上返回 0 条数据，且最新调试页已出现安全验证。")
+                print("⚠️ 基本可确定是 Cookie / 风控问题，建议立即更新 .env 里的 XHS_COOKIE。")
+                health["last_alerted_empty_count"] = health["consecutive_empty_runs"]
+                save_health_state(health)
             print("=" * 50)
             return
+
+        # 成功抓到数据，重置健康状态
+        health["consecutive_empty_runs"] = 0
+        health["last_successful_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        health["last_status"] = "ok"
+        save_health_state(health)
 
         # 过滤掉太旧的帖子
         cutoff_date = (datetime.now() - timedelta(days=args.days)).strftime("%Y-%m-%d")
