@@ -45,11 +45,24 @@ def test_get_active_cooldown():
     print("✓ 冷却期判断测试通过")
 
 
+class FakeElement:
+    def __init__(self, text="", visible=True):
+        self._text = text
+        self._visible = visible
+
+    def is_visible(self):
+        return self._visible
+
+    def inner_text(self):
+        return self._text
+
+
 class FakePage:
-    def __init__(self, text="", title="", url="https://www.xiaohongshu.com"):
+    def __init__(self, text="", title="", url="https://www.xiaohongshu.com", selector_map=None):
         self._text = text
         self._title = title
         self.url = url
+        self._selector_map = selector_map or {}
 
     def inner_text(self, selector):
         assert selector == "body"
@@ -58,13 +71,37 @@ class FakePage:
     def title(self):
         return self._title
 
+    def query_selector_all(self, selector):
+        value = self._selector_map.get(selector, [])
+        if isinstance(value, list):
+            return value
+        return [value] if value else []
+
+    def query_selector(self, selector):
+        value = self._selector_map.get(selector)
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+
 
 def test_is_verification_page():
     """测试验证页识别"""
     blocked = FakePage(text="请完成安全验证后继续访问")
-    normal = FakePage(text="这里是正常的租房搜索结果页面")
+    normal = FakePage(
+        text="发现 消息 通知 我 搜索 这里是正常的租房搜索结果页面",
+        selector_map={
+            'input[placeholder*="搜索"]': FakeElement(visible=True)
+        }
+    )
+    ambiguous = FakePage(
+        text="请先登录后查看更多内容",
+        selector_map={
+            'input[placeholder*="搜索"]': FakeElement(visible=True)
+        }
+    )
     assert is_verification_page(blocked) == True
     assert is_verification_page(normal) == False
+    assert is_verification_page(ambiguous) == False
     print("✓ 验证页识别测试通过")
 
 

@@ -202,24 +202,125 @@ def clear_cooldown(cooldown_state):
         save_cooldown_state(cooldown_state)
 
 
-def is_verification_page(page):
-    try:
-        page_text = page.inner_text("body")[:3000]
-    except Exception:
-        page_text = ""
-
-    try:
-        page_title = page.title() or ""
-    except Exception:
-        page_title = ""
-
-    current_url = getattr(page, "url", "") or ""
-    combined = f"{page_title}\n{page_text}\n{current_url}"
-    signals = [
-        "安全验证", "验证你是否为真人", "请完成验证", "异常访问",
-        "访问受限", "验证码", "captcha", "secpo", "验证中"
+def collect_page_signals(page):
+    """收集页面上的正常信号与风控信号，避免误判。"""
+    selectors = [
+        'iframe[src*="captcha"]',
+        'div[class*="captcha"]',
+        'div[class*="verify"]',
+        'div[class*="verification"]',
+        'div[class*="safe"]',
+        'div[class*="security"]',
+        'div[class*="login"]',
+        'div[class*="modal"]'
     ]
-    return any(signal.lower() in combined.lower() for signal in signals)
+
+    visible_texts = []
+    for sel in selectors:
+        try:
+            elements = page.query_selector_all(sel)
+        except Exception:
+            elements = []
+        for el in elements[:8]:
+            try:
+                if el.is_visible():
+                    txt = (el.inner_text() or "").strip()
+                    if txt:
+                        visible_texts.append(txt)
+            except Exception:
+                continue
+
+    try:
+        body_text = (page.inner_text("body") or "")[:4000]
+    except Exception:
+        body_text = ""
+
+    if not visible_texts and body_text:
+        visible_texts.append(body_text)
+
+    combined = "\n".join(visible_texts) if visible_texts else body_text
+
+    positive_signals = [
+        "发现", "消息", "通知", "我", "搜索", "大家都在搜", "热门搜索"
+    ]
+    blocking_signals = [
+        "安全验证", "验证你是否为真人", "请完成验证", "异常访问",
+        "访问受限", "拖动滑块", "请先登录", "扫码登录", "验证码",
+        "登录后查看更多", "立即登录", "继续访问"
+    ]
+
+    positive_score = sum(1 for signal in positive_signals if signal in combined)
+    blocking_score = sum(1 for signal in blocking_signals if signal in combined)
+
+    login_modal_visible = False
+    normal_header_visible = False
+    search_input_visible = False
+
+    structural_positive_selectors = [
+        'input[placeholder*="搜索"]',
+        'input[class*="search"]',
+        'div[class*="search-bar"]',
+        'div[class*="searchBar"]',
+        'a[href="/"]',
+    ]
+    structural_blocking_selectors = [
+        'iframe[src*="captcha"]',
+        'div.login-container',
+        'div[class*="login-modal"]',
+        'div[class*="loginContainer"]',
+        'div[class*="captcha"]',
+        'div[class*="verify"]',
+        'div[class*="verification"]',
+    ]
+
+    for sel in structural_positive_selectors:
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                if 'input' in sel:
+                    search_input_visible = True
+                else:
+                    normal_header_visible = True
+                break
+        except Exception:
+            continue
+
+    for sel in structural_blocking_selectors:
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                if 'login' in sel:
+                    login_modal_visible = True
+                blocking_score += 2
+        except Exception:
+            continue
+
+    return {
+        "combined_text": combined,
+        "positive_score": positive_score + (2 if normal_header_visible else 0) + (2 if search_input_visible else 0),
+        "blocking_score": blocking_score,
+        "login_modal_visible": login_modal_visible,
+        "normal_header_visible": normal_header_visible,
+        "search_input_visible": search_input_visible,
+    }
+
+
+def is_verification_page(page):
+    signals = collect_page_signals(page)
+
+    # 明显正常：有搜索框/首页结构，且没有很强的风控信号
+    if (signals["search_input_visible"] or signals["normal_header_visible"] or signals["positive_score"] >= 3) and signals["blocking_score"] < 3:
+        return False
+
+    # 明显异常：纯风控文案，且没有任何正常首页信号
+    if signals["blocking_score"] >= 1 and signals["positive_score"] == 0 and not signals["search_input_visible"] and not signals["normal_header_visible"]:
+        return True
+
+    # 明显异常：风控信号强，且正常信号不足
+    if signals["blocking_score"] >= 3 and signals["positive_score"] <= 1:
+        return True
+
+    return False
 
 
 def human_sleep(min_seconds, max_seconds):
@@ -251,6 +352,15 @@ def warm_up_homepage(page):
     print("  首页预热中...")
     page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
     human_sleep(2.5, 5.5)
+
+    homepage_signals = collect_page_signals(page)
+    print(
+        "  首页信号: "
+        f"positive={homepage_signals['positive_score']}, "
+        f"blocking={homepage_signals['blocking_score']}, "
+        f"search_input={homepage_signals['search_input_visible']}, "
+        f"login_modal={homepage_signals['login_modal_visible']}"
+    )
 
     if is_verification_page(page):
         save_verification_artifacts(page, "homepage")
@@ -424,6 +534,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
     pages_limit = max_pages or scraper_config.get("max_pages", 5)
     delay = scraper_config.get("delay_seconds", 2)
     cookie_str = os.getenv("XHS_COOKIE", "")
+    use_env_cookie = os.getenv("XHS_USE_ENV_COOKIE", "false").strip().lower() in {"1", "true", "yes", "on"}
     cooldown_state = load_cooldown_state()
 
     keyword_groups = split_keywords_into_groups(keywords, scraper_config.get("keyword_group_count", 3))
@@ -448,8 +559,8 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             locale="zh-CN",
         )
 
-        # 注入 Cookie
-        if cookie_str:
+        # 默认优先使用持久化 profile，避免旧 .env Cookie 污染现有登录态
+        if cookie_str and use_env_cookie:
             cookies = []
             for item in cookie_str.split(";"):
                 item = item.strip()
@@ -463,7 +574,9 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                     })
             if cookies:
                 context.add_cookies(cookies)
-                print(f"  已注入 {len(cookies)} 个 Cookie")
+                print(f"  已按 XHS_USE_ENV_COOKIE 注入 {len(cookies)} 个 Cookie")
+        elif cookie_str:
+            print("  已检测到 .env 中的 XHS_COOKIE，但默认不注入；当前优先复用持久化 profile 登录态")
 
         page = context.pages[0] if context.pages else context.new_page()
 
@@ -476,8 +589,8 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
         except Exception as e:
             print(f"  首页预热失败，继续谨慎执行: {e}")
 
-        # 如果有 Cookie，先访问首页让 Cookie 生效
-        if cookie_str:
+        # 只有显式启用 .env Cookie 注入时，才额外访问首页让 Cookie 生效
+        if cookie_str and use_env_cookie:
             try:
                 page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=20000)
                 human_sleep(1, 2)
@@ -509,23 +622,22 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             # 处理登录弹窗 — 小红书搜索必须登录
             login_modal = page.query_selector('div.login-container, div[class*="login-modal"], div[class*="loginContainer"]')
             if login_modal:
-                if not cookie_str:
-                    print("  ⚠️ 小红书搜索需要登录才能查看结果")
-                    print("  请按以下步骤配置 Cookie:")
-                    print("    1. 浏览器打开 https://www.xiaohongshu.com 并登录")
-                    print("    2. F12 打开开发者工具 → Application → Cookies")
-                    print("    3. 复制所有 Cookie 值到 .env 文件:")
+                if not (cookie_str and use_env_cookie):
+                    print("  ⚠️ 小红书搜索页出现登录弹窗，当前持久化 profile 可能未完全放行")
+                    print("  建议优先运行: python scripts/open_profile.py")
+                    print("  在同一份 playwright-profile 里手动登录/过验证后再重试")
+                    print("  如需回退到 .env Cookie 注入模式，可设置:")
+                    print('       XHS_USE_ENV_COOKIE=true')
                     print('       XHS_COOKIE=a1=xxx; webId=xxx; web_session=xxx; ...')
                     login_blocked = True
                     continue
 
-                # 有 Cookie 但还是弹登录 → Cookie 过期
-                # 尝试关闭弹窗看看
+                # 显式启用了 .env Cookie 注入，但仍弹登录 → Cookie 很可能过期
                 page.keyboard.press("Escape")
                 human_sleep(0.8, 1.4)
                 login_still = page.query_selector('div.login-container, div[class*="login-modal"]')
                 if login_still and login_still.is_visible():
-                    print("  ⚠️ Cookie 已过期，请重新获取")
+                    print("  ⚠️ 已启用 .env Cookie 注入，但仍被要求登录，Cookie 很可能已过期")
                     login_blocked = True
                     continue
                 print("  已关闭登录弹窗")
@@ -826,7 +938,7 @@ def main():
             print("  没有获取到数据，可能需要检查 Cookie 或网络")
             if health["consecutive_empty_runs"] >= 2 and health.get("last_alerted_empty_count", 0) < health["consecutive_empty_runs"]:
                 print("\n⚠️ 小红书爬虫连续 2 次以上返回 0 条数据，且最新调试页已出现安全验证。")
-                print("⚠️ 基本可确定是 Cookie / 风控问题，建议立即更新 .env 里的 XHS_COOKIE。")
+                print("⚠️ 基本可确定是登录态 / 风控问题。优先检查 playwright-profile 是否仍有效；如需回退 Cookie 模式，再更新 .env 里的 XHS_COOKIE 并开启 XHS_USE_ENV_COOKIE=true。")
                 health["last_alerted_empty_count"] = health["consecutive_empty_runs"]
                 save_health_state(health)
             print("=" * 50)

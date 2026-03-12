@@ -36,18 +36,28 @@
 pip install -r requirements.txt
 ```
 
-### 2. 配置 Cookie（可选）
+### 2. 配置登录态（推荐优先用持久化 profile）
 
-小红书可能需要登录才能访问完整内容：
+小红书现在更容易对搜索页做登录/验证拦截，**推荐优先使用持久化 profile**，而不是直接把 `.env` Cookie 强行注入到浏览器上下文里。
 
-1. 浏览器登录小红书
-2. 打开开发者工具 (F12)
-3. 复制 Cookie
-4. 创建 `.env` 文件：
+#### 推荐方案：持久化 profile
+
+```bash
+python scripts/open_profile.py
+```
+
+在弹出的浏览器里手动扫码、登录、过验证。完成后关闭窗口即可，后续抓取会复用同一份 `data/playwright-profile`。
+
+#### 备选方案：`.env` Cookie 注入
+
+只有在你明确想回退到 Cookie 模式时，再创建 `.env`：
 
 ```env
 XHS_COOKIE=your_cookie_here
+XHS_USE_ENV_COOKIE=true
 ```
+
+> 注意：即使设置了 `XHS_COOKIE`，脚本现在也**默认不会自动注入**；只有显式设置 `XHS_USE_ENV_COOKIE=true` 才会启用，避免旧 Cookie 污染已经可用的持久化 profile。
 
 ### 3. 测试运行
 
