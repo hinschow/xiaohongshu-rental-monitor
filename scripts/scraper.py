@@ -10,6 +10,8 @@ Usage:
     python scripts/scraper.py
     python scripts/scraper.py --headless
     python scripts/scraper.py --max-pages 3
+
+默认使用非无头模式，尽量更接近真人浏览器行为。
 """
 
 import sys
@@ -304,7 +306,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
 
             try:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                time.sleep(random.uniform(3, 5))
+                time.sleep(random.uniform(4.5, 8.5))
             except Exception as e:
                 print(f"  访问搜索页失败: {e}")
                 continue
@@ -494,7 +496,7 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 if loaded_pages < pages_limit:
                     # 滚动加载更多
                     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    time.sleep(random.uniform(delay, delay + 3))
+                    time.sleep(random.uniform(delay + 2, delay + 6))
 
             print(f"  关键词 '{keyword}' 获取 {len([l for l in all_listings if l['keyword'] == keyword])} 条")
 
@@ -557,13 +559,13 @@ def merge_listings(existing, new_listings):
 
 def main():
     parser = argparse.ArgumentParser(description="小红书租房爬虫")
-    parser.add_argument("--headless", action="store_true", default=True, help="无头模式（默认）")
-    parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口")
+    parser.add_argument("--headless", action="store_true", help="使用无头模式")
+    parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口（默认）")
     parser.add_argument("--max-pages", type=int, default=None, help="每个关键词最大翻页数")
     parser.add_argument("--days", type=int, default=7, help="只保留最近N天内发布的帖子（默认7天）")
     args = parser.parse_args()
 
-    headless = not args.no_headless
+    headless = bool(args.headless and not args.no_headless)
 
     try:
         print("=" * 50)
