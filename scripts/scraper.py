@@ -334,6 +334,102 @@ def human_sleep(min_seconds, max_seconds):
     time.sleep(random.uniform(min_seconds, max_seconds))
 
 
+def human_mouse_glide(page, start=None, end=None, steps=None):
+    try:
+        start = start or (random.randint(120, 320), random.randint(100, 220))
+        end = end or (random.randint(500, 980), random.randint(140, 640))
+        steps = steps or random.randint(18, 42)
+        page.mouse.move(start[0], start[1])
+        human_sleep(0.1, 0.4)
+        page.mouse.move(end[0], end[1], steps=steps)
+        human_sleep(0.15, 0.6)
+    except Exception:
+        pass
+
+
+def human_page_settle(page, loops=None):
+    loops = loops or random.randint(1, 3)
+    for _ in range(loops):
+        human_mouse_glide(page)
+        try:
+            page.mouse.wheel(0, random.randint(180, 700))
+        except Exception:
+            pass
+        human_sleep(1.0, 2.4)
+    try:
+        page.mouse.wheel(0, -random.randint(80, 260))
+    except Exception:
+        pass
+    human_sleep(0.8, 2.0)
+
+
+def open_homepage_like_human(page):
+    page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
+    human_sleep(4.0, 7.5)
+    human_page_settle(page, loops=random.randint(2, 3))
+
+
+def search_from_homepage(page, keyword):
+    """尽量模拟真人从首页搜索框发起搜索，而不是直接跳搜索结果页。"""
+    open_homepage_like_human(page)
+
+    search_selectors = [
+        'input[placeholder*="搜索"]',
+        'input[class*="search"]',
+        'div[class*="search-bar"] input',
+        'div[class*="searchBar"] input',
+    ]
+
+    search_input = None
+    for sel in search_selectors:
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                search_input = el
+                break
+        except Exception:
+            continue
+
+    if not search_input:
+        raise RuntimeError("未找到首页搜索框")
+
+    box = None
+    try:
+        box = search_input.bounding_box()
+    except Exception:
+        box = None
+
+    if box:
+        human_mouse_glide(
+            page,
+            end=(int(box["x"] + box["width"] * random.uniform(0.3, 0.7)), int(box["y"] + box["height"] * random.uniform(0.35, 0.7)))
+        )
+
+    search_input.click(delay=random.randint(60, 180))
+    human_sleep(0.5, 1.4)
+
+    try:
+        search_input.press("Control+A")
+    except Exception:
+        pass
+    human_sleep(0.2, 0.6)
+
+    for chunk in keyword:
+        search_input.type(chunk, delay=random.randint(120, 260))
+        if random.random() < 0.18:
+            human_sleep(0.15, 0.45)
+    human_sleep(1.2, 2.8)
+
+    try:
+        search_input.press("Enter")
+    except Exception:
+        page.keyboard.press("Enter")
+
+    human_sleep(5.5, 9.5)
+    human_page_settle(page, loops=random.randint(1, 2))
+
+
+
 def save_verification_artifacts(page, stage, keyword=None):
     timestamp = now_local().strftime("%Y%m%d_%H%M%S")
     safe_keyword = re.sub(r'[^\w\u4e00-\u9fff-]+', '_', (keyword or 'no_keyword'))[:20]
@@ -357,8 +453,7 @@ def save_verification_artifacts(page, stage, keyword=None):
 
 def warm_up_homepage(page):
     print("  首页预热中...")
-    page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
-    human_sleep(2.5, 5.5)
+    open_homepage_like_human(page)
 
     homepage_signals = collect_page_signals(page)
     print(
@@ -373,20 +468,8 @@ def warm_up_homepage(page):
         save_verification_artifacts(page, "homepage")
         return False
 
-    try:
-        page.mouse.move(random.randint(200, 900), random.randint(120, 600), steps=random.randint(12, 30))
-    except Exception:
-        pass
-
-    try:
-        for _ in range(random.randint(1, 2)):
-            page.mouse.wheel(0, random.randint(300, 900))
-            human_sleep(0.8, 1.8)
-        page.mouse.wheel(0, -random.randint(150, 500))
-    except Exception:
-        pass
-
-    human_sleep(1.5, 3.5)
+    human_page_settle(page, loops=random.randint(1, 2))
+    human_sleep(1.8, 4.0)
     return not is_verification_page(page)
 
 
@@ -612,14 +695,22 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 continue
 
             print(f"\n  搜索关键词: {keyword}")
-            search_url = f"https://www.xiaohongshu.com/search_result?keyword={quote(keyword)}&source=web_search_result_notes&sort=time"
 
             try:
-                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                human_sleep(4.5, 8.5)
+                if random.random() < 0.35:
+                    human_sleep(2.5, 5.0)
+                search_from_homepage(page, keyword)
+                human_sleep(2.0, 4.5)
             except Exception as e:
-                print(f"  访问搜索页失败: {e}")
-                continue
+                print(f"  通过首页发起搜索失败，回退直跳搜索页: {e}")
+                search_url = f"https://www.xiaohongshu.com/search_result?keyword={quote(keyword)}&source=web_search_result_notes&sort=time"
+                try:
+                    page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                    human_sleep(6.0, 10.0)
+                    human_page_settle(page, loops=random.randint(1, 2))
+                except Exception as inner_e:
+                    print(f"  访问搜索页失败: {inner_e}")
+                    continue
 
             if is_verification_page(page):
                 save_verification_artifacts(page, "search", keyword)
@@ -653,8 +744,12 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
             try:
                 text_tab = page.query_selector('div.search-tab span:has-text("图文"), a:has-text("图文")')
                 if text_tab:
-                    text_tab.click()
-                    human_sleep(1, 2)
+                    box = text_tab.bounding_box()
+                    if box:
+                        human_mouse_glide(page, end=(int(box["x"] + box["width"] / 2), int(box["y"] + box["height"] / 2)))
+                    human_sleep(0.4, 1.1)
+                    text_tab.click(delay=random.randint(60, 180))
+                    human_sleep(1.8, 3.5)
             except Exception:
                 pass
 
@@ -819,10 +914,15 @@ def scrape_xiaohongshu(config, headless=True, max_pages=None):
                 loaded_pages += 1
                 if loaded_pages < pages_limit:
                     # 滚动加载更多
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    human_sleep(delay + 2, delay + 6)
+                    human_mouse_glide(page)
+                    try:
+                        page.mouse.wheel(0, random.randint(900, 1800))
+                    except Exception:
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    human_sleep(delay + 4, delay + 9)
 
             print(f"  关键词 '{keyword}' 获取 {len([l for l in all_listings if l['keyword'] == keyword])} 条")
+            human_sleep(4.0, 8.0)
 
         # 可选：进入详情页补全信息（对价格为空的帖子）
         missing_price = [l for l in all_listings if not l["price"]]

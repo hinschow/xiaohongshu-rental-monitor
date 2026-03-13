@@ -60,16 +60,53 @@ def format_notification(listing):
 
 
 def send_notifications(listings, config):
-    """输出通知内容，供 OpenClaw 会话直接转发。"""
+    """发送通知到 Telegram"""
     if not config['notification']['enabled']:
         print("通知已禁用")
         return
 
+    import os
+    import json
+    from urllib.request import urlopen, Request
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    chat_id = os.getenv('RENTAL_CHAT_ID') or os.getenv('NEWS_CHAT_ID')
+    
+    if not bot_token or not chat_id:
+        print("⚠️ 缺少 TELEGRAM_BOT_TOKEN 或 RENTAL_CHAT_ID 环境变量，仅打印通知内容")
+        for idx, listing in enumerate(listings, start=1):
+            message = format_notification(listing)
+            print("\n" + "=" * 50)
+            print(f"通知候选 {idx}/{len(listings)}:")
+            print(message)
+            print("=" * 50)
+        print(f"\n✓ 已生成 {len(listings)} 条通知内容（等待 OpenClaw 转发）")
+        return
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    sent_count = 0
+    
     for idx, listing in enumerate(listings, start=1):
         message = format_notification(listing)
         print("\n" + "=" * 50)
         print(f"通知候选 {idx}/{len(listings)}:")
         print(message)
         print("=" * 50)
-
-    print(f"\n✓ 已生成 {len(listings)} 条通知内容（等待 OpenClaw 转发）")
+        
+        try:
+            payload = json.dumps({
+                "chat_id": chat_id,
+                "text": message,
+                "disable_web_page_preview": False
+            }).encode('utf-8')
+            
+            req = Request(url, data=payload, headers={'Content-Type': 'application/json'})
+            with urlopen(req, timeout=10) as response:
+                if response.status == 200:
+                    sent_count += 1
+                else:
+                    print(f"⚠️ Telegram 发送失败: HTTP {response.status}")
+        except Exception as e:
+            print(f"⚠️ Telegram 发送异常: {e}")
+    
+    print(f"\n✓ 已发送 {sent_count}/{len(listings)} 条通知到 Telegram")
